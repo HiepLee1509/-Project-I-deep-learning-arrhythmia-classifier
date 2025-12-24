@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 from tensorflow.keras.models import load_model
 from scipy.signal import find_peaks # Phát hiện đỉnh R
 import pywt # Thư viện Wavelet
@@ -123,68 +124,120 @@ def predict_from_segments(segments_array, model):
     predicted_codes = [CLASSES_KEYS[i] for i in y_pred_indices]
     return predicted_codes, y_pred_indices
 
-# --- HÀM VẼ ĐỒ THỊ (HỖ TRỢ DARK MODE) ---
-def set_plot_style(dark_mode=True):
-    """Cấu hình style cho Matplotlib"""
-    if dark_mode:
-        plt.style.use('dark_background')
-        plt.rcParams.update({
-            "axes.facecolor": "#0e1117",
-            "figure.facecolor": "#0e1117",
-            "grid.color": "#444444",
-            "text.color": "white",
-            "xtick.color": "white",
-            "ytick.color": "white"
-        })
-    else:
-        plt.style.use('default')
-        plt.rcParams.update({
-            "axes.facecolor": "white",
-            "figure.facecolor": "white",
-            "grid.color": "#e6e6e6",
-            "text.color": "black",
-            "xtick.color": "black",
-            "ytick.color": "black"
-        })
+def calculate_hrv_metrics(peaks, fs=360):
+    """
+    Tính toán các chỉ số biến thiên nhịp tim (HRV) cơ bản.
+    Input:
+        peaks: mảng chứa vị trí (index) các đỉnh R
+        fs: tần số lấy mẫu
+    Output:
+        dict chứa các chỉ số và dữ liệu vẽ biểu đồ
+    """
+    if len(peaks) < 2:
+        return None
+    
+    # 1. Tính khoảng cách RR (RR intervals) ra đơn vị mili-giây (ms)
+    # np.diff(peaks) là khoảng cách giữa các đỉnh liên tiếp (tính bằng số mẫu)
+    rr_intervals = np.diff(peaks)
+    rr_ms = (rr_intervals / fs) * 1000
+    
+    # 2. Tính các chỉ số HRV (Time-domain)
+    # SDNN: Độ lệch chuẩn của các khoảng RR (Đánh giá sức khỏe tổng quát)
+    sdnn = np.std(rr_ms)
+    
+    # RMSSD: Căn bậc hai của trung bình bình phương sự khác biệt giữa các khoảng RR liên tiếp
+    # (Đánh giá hoạt động của hệ thần kinh phó giao cảm)
+    diff_rr = np.diff(rr_ms)
+    rmssd = np.sqrt(np.mean(diff_rr**2))
+    
+    # Nhịp tim trung bình (BPM)
+    mean_rr = np.mean(rr_ms)
+    mean_bpm = 60000 / mean_rr
+    
+    # 3. Chuẩn bị dữ liệu Poincaré Plot
+    # Trục X: RR[n], Trục Y: RR[n+1]
+    poincare_x = rr_ms[:-1]
+    poincare_y = rr_ms[1:]
+    
+    return {
+        "rr_ms": rr_ms,
+        "sdnn": sdnn,
+        "rmssd": rmssd,
+        "mean_bpm": mean_bpm,
+        "poincare_x": poincare_x,
+        "poincare_y": poincare_y
+    }
 
-def plot_raw_signal_with_peaks(raw_ecg, peaks, predicted_codes, dark_mode=False):
-    set_plot_style(dark_mode)
-    fig, ax = plt.subplots(figsize=(15, 5))
+def analyze_batch_data(patient_data_map, model, fs=360, wavelet='sym8', r_peak_height=0.5):
+    """
+    Chạy phân tích hàng loạt trên toàn bộ dataset.
+    Trả về DataFrame tóm tắt để hiển thị bảng.
+    """
+    results = []
     
-    line_color = "#00d4ff" if dark_mode else "#1f77b4"
-    ax.plot(raw_ecg, label="Tín hiệu ECG", color=line_color, alpha=0.8, linewidth=1.2)
+    # Lấy độ dài input cần thiết
+    required_len = get_model_input_length(model)
     
-    # Vẽ các điểm R với màu tương ứng
-    for code in CLASSES_KEYS:
-        info = CLASS_INFO[code]
-        # Lấy các đỉnh thuộc lớp này
-        # predicted_codes là list, cần chuyển thành np array để so sánh
-        mask = np.array(predicted_codes) == code
-        class_peaks = peaks[mask]
-        
-        if len(class_peaks) > 0:
-            ax.scatter(class_peaks, raw_ecg[class_peaks], 
-                       color=info['color'], 
-                       label=info['name'], 
-                       s=70, zorder=5, edgecolors='white' if dark_mode else 'black')
+    # Duyệt qua từng bệnh nhân/bản ghi
+    # Sử dụng enumerate để trả về tiến trình nếu cần
+    total_files = len(patient_data_map)
+    
+    for idx, (pid, raw_signal) in enumerate(patient_data_map.items()):
+        try:
+            # 1. Chuyển đổi sang numpy array
+            signal = np.array(raw_signal)
+            
+            # 2. Xử lý tín hiệu
+            denoised = denoise_signal_wavelet(signal, wavelet=wavelet)
+            segments, peaks = detect_and_segment(denoised, r_peak_height, output_length=required_len)
+            
+            stats = {
+                "ID": pid,
+                "Total Beats": 0,
+                "BPM (Avg)": 0,
+                "Status": "Error",
+                "Risk Level": "Unknown",
+                "N": 0, "S": 0, "V": 0, "F": 0, "Q": 0
+            }
 
-    ax.set_title("Phân loại trên toàn bộ tín hiệu")
-    ax.set_xlabel("Mẫu (Sample)")
-    ax.set_ylabel("Biên độ (mV)")
-    ax.legend(loc='upper right')
-    plt.tight_layout()
-    return fig
+            if len(segments) > 0:
+                # 3. Dự đoán
+                pred_codes, _ = predict_from_segments(segments, model)
+                
+                # 4. Thống kê
+                counts = pd.Series(pred_codes).value_counts()
+                total_beats = len(pred_codes)
+                
+                # Tính nhịp tim trung bình
+                if len(peaks) > 1:
+                    avg_diff = np.mean(np.diff(peaks))
+                    bpm = int(60 / (avg_diff / fs))
+                else:
+                    bpm = 0
+                
+                # Cập nhật stats
+                stats["Total Beats"] = total_beats
+                stats["BPM (Avg)"] = bpm
+                stats["Status"] = "Success"
+                
+                # Fill số lượng từng loại
+                for code in ['N', 'S', 'V', 'F', 'Q']:
+                    count = counts.get(code, 0)
+                    stats[code] = count
+                
+                # Đánh giá mức độ nguy hiểm
+                if stats['V'] > 0 or stats['F'] > 0:
+                    stats['Risk Level'] = "High 🔴"
+                elif stats['S'] > 0:
+                    stats['Risk Level'] = "Medium 🟡"
+                else:
+                    stats['Risk Level'] = "Low 🟢"
+            else:
+                stats["Status"] = "No Peaks Found"
+                
+            results.append(stats)
+            
+        except Exception as e:
+            results.append({"ID": pid, "Status": f"Error: {str(e)}", "Risk Level": "Error"})
 
-def plot_beat_segment(beat_data, pred_code=None, dark_mode=False):
-    set_plot_style(dark_mode)
-    fig, ax = plt.subplots(figsize=(8, 3))
-    
-    info = CLASS_INFO.get(pred_code, {'name': 'Unknown', 'color': 'gray'})
-    
-    ax.plot(beat_data.squeeze(), color=info['color'], linewidth=2)
-    
-    title = f"Nhịp: {info['name']}" if pred_code else "Hình dạng nhịp tim"
-    ax.set_title(title)
-    ax.grid(True, alpha=0.3, linestyle='--')
-    plt.tight_layout()
-    return fig
+    return pd.DataFrame(results)
