@@ -1,5 +1,6 @@
 # .\venv\Scripts\activate
 # streamlit run app.py
+# python -m streamlit run app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -30,7 +31,7 @@ model, REQUIRED_LENGTH = setup_model(MODEL_PATH)
 
 # SIDEBAR (INPUT & SETTINGS)
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/2966/2966486.png", width=80)
+    st.image("logo for project 1.png", width=200)
     st.title("AI Heart Guard")
     st.markdown("---")
     
@@ -41,7 +42,7 @@ with st.sidebar:
     fs = st.number_input("Tần số lấy mẫu (Hz)", 100, 1000, 360, help="MIT-BIH thường là 360Hz")
     
     with st.expander("Nâng cao (Wavelet/Peak)"):
-        wavelet_type = st.selectbox("Wavelet Type", ['sym8', 'db4', 'db8'], index=0)
+        wavelet_type = st.selectbox("Wavelet Type", ['sym8', 'db4', 'db5', 'db8'], index=2)
         r_peak_height = st.slider("Min Peak Height", 0.1, 5.0, 0.5)
     
     st.markdown("---")
