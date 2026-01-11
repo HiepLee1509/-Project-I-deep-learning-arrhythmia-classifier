@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from src.backend import analyze_batch_data, CLASS_INFO
+from src.backend import analyze_batch_data, CLASS_INFO, generate_ai_doctor_advice
 
 def render_batch_analysis(patient_data_map, model, fs, wavelet_type, r_peak_height):
     """Hàm hiển thị giao diện quét hàng loạt"""
@@ -20,10 +20,81 @@ def render_batch_analysis(patient_data_map, model, fs, wavelet_type, r_peak_heig
         progress_bar.progress(100)
         status_text.text("✅ Hoàn tất!")
         st.session_state.batch_df = batch_df
+        
+        # Generate AI Doctor Advice after scanning
+        st.session_state.ai_advice = generate_ai_doctor_advice(batch_df)
 
     # show results if available
     if 'batch_df' in st.session_state:
         df = st.session_state.batch_df
+        
+        # ========== AI DOCTOR ADVICE BOX ==========
+        if 'ai_advice' in st.session_state:
+            advice = st.session_state.ai_advice
+            
+            # Determine styling based on advice level
+            advice_styles = {
+                'excellent': {
+                    'bg_color': '#d4edda',
+                    'border_color': '#28a745',
+                    'icon_color': '#155724'
+                },
+                'good': {
+                    'bg_color': '#d1ecf1',
+                    'border_color': '#17a2b8',
+                    'icon_color': '#0c5460'
+                },
+                'caution': {
+                    'bg_color': '#fff3cd',
+                    'border_color': '#ffc107',
+                    'icon_color': '#856404'
+                },
+                'warning': {
+                    'bg_color': '#ffeaa7',
+                    'border_color': '#f39c12',
+                    'icon_color': '#b8860b'
+                },
+                'danger': {
+                    'bg_color': '#f8d7da',
+                    'border_color': '#dc3545',
+                    'icon_color': '#721c24'
+                },
+                'info': {
+                    'bg_color': '#e2e3e5',
+                    'border_color': '#6c757d',
+                    'icon_color': '#383d41'
+                }
+            }
+            
+            style = advice_styles.get(advice['level'], advice_styles['info'])
+            
+            # Display Advice Box with custom styling
+            st.markdown("---")
+            st.markdown(f"""
+            <div style="
+                background-color: {style['bg_color']};
+                border-left: 5px solid {style['border_color']};
+                padding: 20px;
+                border-radius: 8px;
+                margin: 20px 0;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            ">
+                <h3 style="color: {style['icon_color']}; margin-top: 0;">
+                    {advice['icon']} <strong>{advice['title']}</strong>
+                </h3>
+                <p style="font-size: 16px; line-height: 1.6; color: #333;">
+                    {advice['message']}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Display Recommendations
+            if advice['recommendations']:
+                st.markdown("#### 💡 Khuyến nghị:")
+                for i, rec in enumerate(advice['recommendations'], 1):
+                    st.markdown(f"**{i}.** {rec}")
+            
+            st.markdown("---")
         
         # 1. Metrics
         c1, c2, c3, c4 = st.columns(4)

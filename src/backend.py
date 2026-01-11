@@ -240,3 +240,164 @@ def analyze_batch_data(patient_data_map, model, fs=360, wavelet='sym8', r_peak_h
             results.append({"ID": pid, "Status": f"Error: {str(e)}", "Risk Level": "Error"})
 
     return pd.DataFrame(results)
+
+def generate_ai_doctor_advice(batch_df):
+    """
+    Phân tích kết quả quét hàng loạt và tạo lời khuyên từ AI Doctor.
+    
+    Args:
+        batch_df: DataFrame chứa kết quả phân tích từ analyze_batch_data
+        
+    Returns:
+        dict chứa thông tin advice: {
+            'level': 'excellent' | 'warning' | 'danger' | 'caution',
+            'title': str,
+            'message': str,
+            'recommendations': list of str,
+            'icon': str
+        }
+    """
+    if batch_df is None or len(batch_df) == 0:
+        return {
+            'level': 'info',
+            'title': 'Chưa có dữ liệu',
+            'message': 'Vui lòng quét dữ liệu trước khi xem lời khuyên.',
+            'recommendations': [],
+            'icon': 'ℹ️'
+        }
+    
+    # Tính tổng số nhịp theo từng loại
+    total_beats = batch_df[['N', 'S', 'V', 'F', 'Q']].sum()
+    total_all_beats = total_beats.sum()
+    
+    if total_all_beats == 0:
+        return {
+            'level': 'warning',
+            'title': 'Không phát hiện nhịp tim',
+            'message': 'Không tìm thấy nhịp tim hợp lệ trong dữ liệu. Vui lòng kiểm tra lại chất lượng tín hiệu ECG.',
+            'recommendations': [
+                'Kiểm tra lại thiết bị đo ECG',
+                'Đảm bảo điện cực tiếp xúc tốt với da',
+                'Thử đo lại trong môi trường yên tĩnh'
+            ],
+            'icon': '⚠️'
+        }
+    
+    # Tính phần trăm từng loại
+    pct_N = (total_beats['N'] / total_all_beats) * 100
+    pct_S = (total_beats['S'] / total_all_beats) * 100
+    pct_V = (total_beats['V'] / total_all_beats) * 100
+    pct_F = (total_beats['F'] / total_all_beats) * 100
+    pct_Q = (total_beats['Q'] / total_all_beats) * 100
+    
+    # Đếm số ca có nguy cơ cao
+    high_risk_count = len(batch_df[batch_df['Risk Level'].str.contains("High", na=False)])
+    medium_risk_count = len(batch_df[batch_df['Risk Level'].str.contains("Medium", na=False)])
+    total_patients = len(batch_df)
+    high_risk_pct = (high_risk_count / total_patients) * 100 if total_patients > 0 else 0
+    
+    # Logic phân tích và đưa ra lời khuyên
+    if pct_N > 95:
+        # Excellent Health - >95% Normal
+        return {
+            'level': 'excellent',
+            'title': 'Sức khỏe tim mạch xuất sắc',
+            'message': f'Kết quả phân tích cho thấy {pct_N:.1f}% nhịp tim là bình thường. Đây là dấu hiệu rất tích cực về sức khỏe tim mạch của bạn.',
+            'recommendations': [
+                'Tiếp tục duy trì lối sống lành mạnh',
+                'Tập thể dục đều đặn ít nhất 30 phút mỗi ngày',
+                'Ăn uống cân bằng, hạn chế chất béo và muối',
+                'Khám sức khỏe định kỳ 6 tháng/lần',
+                'Quản lý căng thẳng và ngủ đủ giấc'
+            ],
+            'icon': '✅',
+            'stats': {
+                'normal_pct': pct_N,
+                'total_beats': int(total_all_beats),
+                'total_patients': total_patients
+            }
+        }
+    
+    elif pct_V > 5 or pct_F > 2 or high_risk_pct > 20:
+        # Danger - High frequency of VEB/Fusion or many high-risk patients
+        return {
+            'level': 'danger',
+            'title': 'Cảnh báo: Phát hiện rối loạn nhịp tim nghiêm trọng',
+            'message': f'Phát hiện {pct_V:.1f}% nhịp ngoại tâm thu thất (VEB) và {pct_F:.1f}% nhịp hỗn hợp. {high_risk_pct:.1f}% số ca có nguy cơ cao. Đây là dấu hiệu cần được đánh giá y tế ngay lập tức.',
+            'recommendations': [
+                '⚠️ KHẨN CẤP: Liên hệ bác sĩ tim mạch trong vòng 24-48 giờ',
+                'Tránh các hoạt động gắng sức cho đến khi được đánh giá',
+                'Theo dõi các triệu chứng: đau ngực, khó thở, chóng mặt',
+                'Gọi cấp cứu 115 nếu xuất hiện đau ngực dữ dội hoặc ngất xỉu',
+                'Chuẩn bị hồ sơ y tế và kết quả ECG này để bác sĩ xem xét',
+                'Tránh caffeine, rượu và các chất kích thích'
+            ],
+            'icon': '🚨',
+            'stats': {
+                'veb_pct': pct_V,
+                'fusion_pct': pct_F,
+                'high_risk_pct': high_risk_pct,
+                'total_beats': int(total_all_beats)
+            }
+        }
+    
+    elif pct_S > 10 or medium_risk_count > total_patients * 0.3:
+        # Warning - High frequency of SVEB
+        return {
+            'level': 'warning',
+            'title': 'Cảnh báo: Phát hiện rối loạn nhịp tim nhẹ',
+            'message': f'Phát hiện {pct_S:.1f}% nhịp ngoại tâm thu trên thất (SVEB). Mặc dù thường lành tính, nhưng tần suất cao có thể cần được theo dõi.',
+            'recommendations': [
+                'Nên đi khám bác sĩ tim mạch trong vòng 1-2 tuần',
+                'Theo dõi các triệu chứng: hồi hộp, đánh trống ngực',
+                'Hạn chế caffeine, rượu và các chất kích thích',
+                'Quản lý căng thẳng và đảm bảo ngủ đủ giấc',
+                'Tập thể dục nhẹ nhàng, tránh gắng sức quá mức',
+                'Ghi nhật ký các triệu chứng để báo cáo với bác sĩ'
+            ],
+            'icon': '⚠️',
+            'stats': {
+                'sveb_pct': pct_S,
+                'medium_risk_count': medium_risk_count,
+                'total_beats': int(total_all_beats)
+            }
+        }
+    
+    elif pct_N < 80:
+        # Caution - Lower than expected normal beats
+        return {
+            'level': 'caution',
+            'title': 'Lưu ý: Cần theo dõi thêm',
+            'message': f'Chỉ có {pct_N:.1f}% nhịp tim bình thường. Mặc dù không có dấu hiệu nguy hiểm ngay lập tức, nhưng nên được đánh giá thêm.',
+            'recommendations': [
+                'Nên đi khám bác sĩ để được đánh giá toàn diện',
+                'Theo dõi các triệu chứng bất thường',
+                'Duy trì lối sống lành mạnh',
+                'Tránh các yếu tố gây căng thẳng',
+                'Cân nhắc đo Holter ECG 24h để theo dõi liên tục'
+            ],
+            'icon': '💡',
+            'stats': {
+                'normal_pct': pct_N,
+                'total_beats': int(total_all_beats)
+            }
+        }
+    
+    else:
+        # Good but not excellent
+        return {
+            'level': 'good',
+            'title': 'Sức khỏe tim mạch tốt',
+            'message': f'Kết quả phân tích cho thấy {pct_N:.1f}% nhịp tim bình thường. Sức khỏe tim mạch của bạn đang ở mức tốt.',
+            'recommendations': [
+                'Tiếp tục duy trì lối sống lành mạnh',
+                'Tập thể dục đều đặn',
+                'Khám sức khỏe định kỳ',
+                'Theo dõi các chỉ số tim mạch'
+            ],
+            'icon': '👍',
+            'stats': {
+                'normal_pct': pct_N,
+                'total_beats': int(total_all_beats)
+            }
+        }
